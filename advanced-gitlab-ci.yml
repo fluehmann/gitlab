@@ -1,0 +1,135 @@
+# Define the stages for the pipeline
+stages:
+  - build
+  - quality
+  - test
+  - deploy
+
+# Define variables to be used in the pipeline
+variables:
+  APP_NAME: "my-app"
+  DOCKER_REGISTRY: "my-registry.example.com"
+  DOCKER_IMAGE_TAG: "$CI_COMMIT_SHA"
+
+
+### BUILD_STAGE with build job that builds the Docker image and pushes it to a Docker registry
+build:
+  image: docker:stable
+  stage: build
+  services:
+    - docker:dind # run docker in docker
+  script:
+    - echo "Build the application"
+    # Build the Docker image
+    - docker build -t $DOCKER_REGISTRY/$APP_NAME:$DOCKER_IMAGE_TAG .
+    # Log in to the Docker registry
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $DOCKER_REGISTRY
+    # Push the Docker image to the registry
+    - docker push $DOCKER_REGISTRY/$APP_NAME:$DOCKER_IMAGE_TAG
+  # Run the build job when code is pushed to any branch
+  only:
+    - /^feature.*$/
+    - /^develop.*$/
+    - /^main.*$/
+
+
+### QUALITY_STAGE with linting, unittests, static code analysis
+quality:
+  stage: quality
+  # Use the official Python 3.8 image for both jobs
+  image: python:3.8
+  # Install required dependencies
+  before_script:
+    - pip install -r requirements.txt #flake8, pep8-naming, unittest, sonar scanner
+
+  # Define the lint job that performs code linting using Flake8
+  lint:
+    script:
+      # Run Flake8 on the Python code to check for code style issues
+      - flake8 --select=F,N --show-source --exclude=env,venv,.git,__pycache__ .
+  # Define the unit_test job that runs the unit tests
+  unit_test:
+    script:
+      # Run the unit tests using the unittest module
+      - python -m unittest discover -s tests/unit
+
+  # Define the static_code_analysis job that performs static code analysis using Bandit
+  static_code_analysis:
+    script:
+      # Run sonar
+      - sonar-scanner
+
+  # Run the quality stage when code is pushed to one of these branches
+  only:
+    - /^feature.*$/
+    - /^develop.*$/
+    - /^main.*$/
+
+# TEST_STAGE performing integration and regression tests
+# TODO add temporary integration testing environment
+test:
+  stage: test
+  # Use the official Python 3.8 image for both jobs
+  image: python:3.8
+  # Install required dependencies
+  before_script:
+    - pip install -r requirements.txt # (newman, selenium, pytest, requests)
+
+  # Define the integration_test job that runs the integration tests using Postman
+  integration_test:
+    script:
+      # Run the Postman collection using Newman and output the results to a JSON file
+      - newman run my_collection.json --reporters json --reporter-json-export results.json
+
+  # Define the regression test
+  regression_test:
+    image: python:3.8
+    script:
+      # Run the regression test using Selenium
+      - pytest tests/regression_test.py
+
+    # Run the test stage when merge-requests are opened on a temporary test-environment
+    only:
+      - merge_requests
+
+
+### DEPLOYMENT_STAGE deployment to production
+deploy:
+  stage: deploy
+  # Use the official Python 3.8 image for both jobs
+  image: python:3.8
+  # Install required dependencies
+  before_script:
+    - pip install -r requirements.txt
+
+  # Define the deploy_staging job that deploys the Docker image to a staging environment
+  deploy_staging:
+    script:
+      # Pull the Docker image from the registry
+      - docker pull $DOCKER_REGISTRY/$APP_NAME:$DOCKER_IMAGE_TAG
+      # Run the Docker container on the staging environment
+      - docker run -d -p 8080:8080 $DOCKER_REGISTRY/$APP_NAME:$DOCKER_IMAGE_TAG
+    environment:
+      name: staging
+      url: https://staging.example.com
+    # only run when merge request from feature to develop
+    only:
+      - develop
+    rules:
+      - if: '$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^feature\/*/ && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop" && $CI_PIPELINE_SOURCE == "merge_request_event"'
+
+  # Define the deploy_production job that deploys the Docker image to a production environment
+  deploy_production:
+    script:
+      # Pull the Docker image from the registry
+      - docker pull $DOCKER_REGISTRY/$APP_NAME:$DOCKER_IMAGE_TAG
+      # Run the Docker container on the production environment
+      - docker run -d -p 8080:8080 $DOCKER_REGISTRY/$APP_NAME:$DOCKER_IMAGE_TAG
+    environment:
+      name: production
+      url: https://example.com
+    # only run when merge request from main to feature
+    only:
+      - main
+    rules:
+      - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "develop" && $CI_PIPELINE_SOURCE == "merge_request_event"'

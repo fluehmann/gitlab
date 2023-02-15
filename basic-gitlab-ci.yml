@@ -1,0 +1,78 @@
+# Define the stages for the pipeline
+stages:
+  - build
+  - test
+  - deploy
+
+# Define variables to be used in the pipeline
+variables:
+  APP_NAME: "my-app"
+  DOCKER_REGISTRY: "my-registry.example.com"
+  DOCKER_IMAGE_TAG: "$CI_COMMIT_SHA"
+
+# Define the build job that builds the Docker image and pushes it to a Docker registry
+build:
+  image: docker:stable
+  stage: build
+  services:
+    - docker:dind
+  script:
+    # Build the Docker image
+    - docker build -t $DOCKER_REGISTRY/$APP_NAME:$DOCKER_IMAGE_TAG .
+    # Log in to the Docker registry
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $DOCKER_REGISTRY
+    # Push the Docker image to the registry
+    - docker push $DOCKER_REGISTRY/$APP_NAME:$DOCKER_IMAGE_TAG
+
+# Define the test stage that includes two jobs: unit_test and integration_test
+test:
+  stage: test
+  # Use the official Python 3.8 image for both jobs
+  image: python:3.8
+  # Install required dependencies
+  before_script:
+    - pip install -r requirements.txt
+  # Define the unit_test job that runs the unit tests
+  unit_test:
+    script:
+      # Run the unit tests using the unittest module
+      - python -m unittest discover -s tests/unit
+  # Define the integration_test job that runs the integration tests using Postman
+  integration_test:
+    image: postman/newman:alpine
+    script:
+      # Install the required dependencies for Postman
+      - apk add nodejs npm
+      # Install the Postman collection runner
+      - npm install -g newman
+      # Run the integration tests using Postman
+      - newman run tests/integration/my-collection.json
+
+# Define the deploy stage that includes two jobs: deploy_staging and deploy_production
+deploy:
+  stage: deploy
+  # Use the official Python 3.8 image for both jobs
+  image: python:3.8
+  # Install required dependencies
+  before_script:
+    - pip install -r requirements.txt
+  # Define the deploy_staging job that deploys the Docker image to a staging environment
+  deploy_staging:
+    script:
+      # Pull the Docker image from the registry
+      - docker pull $DOCKER_REGISTRY/$APP_NAME:$DOCKER_IMAGE_TAG
+      # Run the Docker container on the staging environment
+      - docker run -d -p 8080:8080 $DOCKER_REGISTRY/$APP_NAME:$DOCKER_IMAGE_TAG
+    environment:
+      name: staging
+      url: https://staging.example.com
+  # Define the deploy_production job that deploys the Docker image to a production environment
+  deploy_production:
+    script:
+      # Pull the Docker image from the registry
+      - docker pull $DOCKER_REGISTRY/$APP_NAME:$DOCKER_IMAGE_TAG
+      # Run the Docker container on the production environment
+      - docker run -d -p 8080:8080 $DOCKER_REGISTRY/$APP_NAME:$DOCKER_IMAGE_TAG
+    environment:
+      name: production
+      url: https://example.com
